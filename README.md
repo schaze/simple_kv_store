@@ -98,7 +98,7 @@ println!("Value: {}", store.get::<String>("some_key").await.unwrap()); // retrie
 **Be aware:** Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
 This library provides a normalization function you can use to ensure your keys are always valid: `normalize_key`
 
-# Examples
+#### Examples
 
 ```rust
 let key = "device/switch/state";
