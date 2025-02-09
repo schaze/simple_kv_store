@@ -61,7 +61,7 @@ println!("Value: {}", store.get::<i64>("some_key").await.unwrap()); // retrieve 
                                                                     // from the println! usage
 ```
 
-**Check chapter [Key values](#key-values)**
+--> Check chapter [Key values](#key-values)
 
 #### **Kubernetes Secret Store** (Handles base64 encoding/decoding)
 
@@ -77,7 +77,7 @@ println!("Value: {}", store.get::<f64>("some_key").await.unwrap()); // retrieve 
                                                                     // from the println! usage
 ```
 
-**Check chapter [Key values](#key-values)**
+--> Check chapter [Key values](#key-values)
 
 #### **SQLite Store**
 
