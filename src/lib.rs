@@ -54,6 +54,8 @@ impl KeyValueStore {
 /// # Examples
 ///
 /// ```
+/// use simple_kv_store::normalize_key;
+///
 /// let key = "device/switch/state";
 /// assert_eq!(normalize_key(key), "device_switch_state");
 ///
