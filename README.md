@@ -61,7 +61,7 @@ println!("Value: {}", store.get::<i64>("some_key").await.unwrap()); // retrieve 
                                                                     // from the println! usage
 ```
 
-_Be aware:_ Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
+--> Check chapter [Key values](#key-values)
 
 #### **Kubernetes Secret Store** (Handles base64 encoding/decoding)
 
@@ -77,7 +77,7 @@ println!("Value: {}", store.get::<f64>("some_key").await.unwrap()); // retrieve 
                                                                     // from the println! usage
 ```
 
-_Be aware:_ Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
+--> Check chapter [Key values](#key-values)
 
 #### **SQLite Store**
 
@@ -91,6 +91,24 @@ store.set("some_key", &value).await.unwrap(); // store the value
 println!("Value: {}", store.get::<String>("some_key").await.unwrap()); // retrieve the value -- type annotations are
                                                                        // needed in this case as no type can be deferred
                                                                        // from the println! usage
+```
+
+### Key values
+
+**Be aware:** Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
+This library provides a normalization function you can use to ensure your keys are always valid: `normalize_key`
+
+#### Examples
+
+```rust
+let key = "device/switch/state";
+assert_eq!(normalize_key(key), "device_switch_state");
+
+let key = "config:mode/type";
+assert_eq!(normalize_key(key), "config_mode_type");
+
+let key = "user@domain.com";
+assert_eq!(normalize_key(key), "user_domain.com");
 ```
 
 ## API Overview
