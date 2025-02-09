@@ -45,3 +45,30 @@ impl KeyValueStore {
         }
     }
 }
+
+/// Normalizes a key to be compatible with Kubernetes ConfigMap and Secret keys.
+///
+/// Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
+/// Any other characters (such as `/`, `:`) will be replaced with underscores (`_`).
+///
+/// # Examples
+///
+/// ```
+/// let key = "device/switch/state";
+/// assert_eq!(normalize_key(key), "device_switch_state");
+///
+/// let key = "config:mode/type";
+/// assert_eq!(normalize_key(key), "config_mode_type");
+///
+/// let key = "user@domain.com";
+/// assert_eq!(normalize_key(key), "user_domain.com");
+/// ```
+pub fn normalize_key(key: &str) -> String {
+    key.chars()
+        .map(|c| match c {
+            '/' | ':' | '@' => '_', // Replace invalid separators with underscore
+            _ if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' => c, // Keep valid characters
+            _ => '_', // Replace any other invalid characters with '_'
+        })
+        .collect()
+}
