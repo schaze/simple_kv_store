@@ -1,6 +1,6 @@
 [package]
 name = "simple_kv_store"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 publish = true
 description = "Provides a generic, async-friendly key-value store abstraction supporting multiple backends (inmemory, sqlite, kubernetes)"
