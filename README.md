@@ -24,7 +24,7 @@ Currently it is mainly designed to be used in a simple smarthome automation cont
 Run the following command to add the library to your project:
 
 ```sh
-cargo add my_library
+cargo add simple_kv_store
 ```
 
 ## Usage
@@ -40,8 +40,11 @@ use my_library::{KeyValueStore, InMemoryStore};
 
 
 let store = KeyValueStore::InMemory(InMemoryStore::new());
-store.set("foo", "bar").await.unwrap();
-println!("Value: {:?}", store.get("foo").await);
+let value = true; // define a owned string value
+store.set("some_key", &value).await.unwrap(); // store the value
+println!("Value: {}", store.get::<bool>("some_key").await.unwrap()); // retrieve the value -- type annotations are
+                                                                     // needed in this case as no type can be deferred
+                                                                     // from the println! usage
 ```
 
 #### **Kubernetes ConfigMap Store**
@@ -51,9 +54,14 @@ use my_library::{KeyValueStore, KubernetesStore, KubernetesResource};
 
 
 let store = KeyValueStore::Kubernetes(KubernetesStore::new("default", "config", KubernetesResource::ConfigMap).await.unwrap());
-store.set("config_key", "config_value").await.unwrap();
-println!("Value: {:?}", store.get("config_key").await);
+let value = 123; // define a owned string value
+store.set("some_key", &value).await.unwrap(); // store the value
+println!("Value: {}", store.get::<i64>("some_key").await.unwrap()); // retrieve the value -- type annotations are
+                                                                    // needed in this case as no type can be deferred
+                                                                    // from the println! usage
 ```
+
+_Be aware:_ Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
 
 #### **Kubernetes Secret Store** (Handles base64 encoding/decoding)
 
@@ -62,9 +70,14 @@ use my_library::{KeyValueStore, KubernetesStore, KubernetesResource};
 
 
 let store = KeyValueStore::Kubernetes(KubernetesStore::new("default", "my-secret", KubernetesResource::Secret).await.unwrap());
-store.set("password", "supersecure").await.unwrap();
-println!("Secret: {:?}", store.get("password").await);
+let value = 123.123; // define a owned string value
+store.set("some_key", &value).await.unwrap(); // store the value
+println!("Value: {}", store.get::<f64>("some_key").await.unwrap()); // retrieve the value -- type annotations are
+                                                                    // needed in this case as no type can be deferred
+                                                                    // from the println! usage
 ```
+
+_Be aware:_ Kubernetes requires keys to consist of **alphanumeric characters (`A-Z`, `a-z`, `0-9`), dashes (`-`), underscores (`_`), and dots (`.`)**.
 
 #### **SQLite Store**
 
@@ -72,9 +85,12 @@ println!("Secret: {:?}", store.get("password").await);
 use my_library::{KeyValueStore, SQLiteStore};
 
 
-let store = KeyValueStore::SQLite(SQLiteStore::new("store.db").await);
-store.set("db_key", "db_value").await.unwrap();
-println!("Value: {:?}", store.get("db_key").await);
+let store = KeyValueStore::SQLite(SQLiteStore::new("store.db").await); // create a sqlite backed store
+let value = "some_value".to_string(); // define a owned string value
+store.set("some_key", &value).await.unwrap(); // store the value
+println!("Value: {}", store.get::<String>("some_key").await.unwrap()); // retrieve the value -- type annotations are
+                                                                       // needed in this case as no type can be deferred
+                                                                       // from the println! usage
 ```
 
 ## API Overview
@@ -93,14 +109,24 @@ pub enum KeyValueStore {
 
 ### **CRUD Methods**
 
-All stores implement the same methods for interacting with key-value data:
+`KeyValueStore` implements the `get`, `set` and `delete` functions and will accept and return any type as value that can be serialized and deserialized with serde.
 
 ```rust
+
 impl KeyValueStore {
-    pub async fn get(&self, key: &str) -> Option<String>;
-    pub async fn set(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>>;
-    pub async fn delete(&self, key: &str) -> Result<(), Box<dyn std::error::Error>>;
+    pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        ...
+    }
+
+    pub async fn set<T: Serialize>( &self, key: &str, value: &T,) -> Result<(), Box<dyn std::error::Error>> {
+        ...
+    }
+
+    pub async fn delete(&self, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+        ...
+    }
 }
+
 ```
 
 ##

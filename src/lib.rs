@@ -3,6 +3,7 @@ mod kubernetes;
 mod sqlite;
 pub use inmemory::*;
 pub use kubernetes::*;
+use serde::{de::DeserializeOwned, Serialize};
 pub use sqlite::*;
 
 /// Provides a multi backend simple Key Value store
@@ -14,19 +15,25 @@ pub enum KeyValueStore {
 }
 
 impl KeyValueStore {
-    pub async fn get(&self, key: &str) -> Option<String> {
-        match self {
+    pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        let value_str = match self {
             KeyValueStore::InMemory(store) => store.get(key).await,
             KeyValueStore::Kubernetes(store) => store.get(key).await,
             KeyValueStore::SQLite(store) => store.get(key).await,
-        }
+        }?;
+        serde_json::from_str(&value_str).ok()
     }
 
-    pub async fn set(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn set<T: Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let value_str = serde_json::to_string(value)?;
         match self {
-            KeyValueStore::InMemory(store) => store.set(key, value).await,
-            KeyValueStore::Kubernetes(store) => store.set(key, value).await,
-            KeyValueStore::SQLite(store) => store.set(key, value).await,
+            KeyValueStore::InMemory(store) => store.set(key, &value_str).await,
+            KeyValueStore::Kubernetes(store) => store.set(key, &value_str).await,
+            KeyValueStore::SQLite(store) => store.set(key, &value_str).await,
         }
     }
 
