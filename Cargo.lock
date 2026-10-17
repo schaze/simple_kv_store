@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "simple_kv_store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "k8s-openapi",
