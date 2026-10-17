@@ -8,17 +8,17 @@ pub struct SQLiteStore {
 }
 
 impl SQLiteStore {
-    pub async fn new(db_path: &str) -> Self {
-        let conn = Connection::open(db_path).expect("Failed to open database");
+    /// Opens (or creates) the database at `db_path` and ensures the store table exists.
+    pub async fn new(db_path: &str) -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open(db_path)?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)",
             [],
-        )
-        .expect("Failed to create table");
+        )?;
 
-        Self {
+        Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-        }
+        })
     }
 
     pub async fn get(&self, key: &str) -> Option<String> {
@@ -43,5 +43,23 @@ impl SQLiteStore {
         let conn = self.conn.lock().await;
         conn.execute("DELETE FROM kv_store WHERE key = ?", params![key])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unopenable_path_returns_error() {
+        let path = std::env::temp_dir().join("simple_kv_store_missing_dir/sub/store.db");
+        assert!(SQLiteStore::new(path.to_str().unwrap()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn opened_store_reads_and_writes() {
+        let store = SQLiteStore::new(":memory:").await.unwrap();
+        store.set("k", "v").await.unwrap();
+        assert_eq!(store.get("k").await.as_deref(), Some("v"));
     }
 }

@@ -85,7 +85,7 @@ println!("Value: {}", store.get::<f64>("some_key").await.unwrap()); // retrieve 
 use my_library::{KeyValueStore, SQLiteStore};
 
 
-let store = KeyValueStore::SQLite(SQLiteStore::new("store.db").await); // create a sqlite backed store
+let store = KeyValueStore::SQLite(SQLiteStore::new("store.db").await?); // create a sqlite backed store
 let value = "some_value".to_string(); // define a owned string value
 store.set("some_key", &value).await.unwrap(); // store the value
 println!("Value: {}", store.get::<String>("some_key").await.unwrap()); // retrieve the value -- type annotations are
