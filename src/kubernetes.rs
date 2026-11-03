@@ -31,64 +31,48 @@ impl KubernetesStore {
         resource_type: KubernetesResource,
     ) -> Result<Self, kube::Error> {
         let client = Client::try_default().await?;
-        let cache = Arc::new(RwLock::new(BTreeMap::new()));
+        let metadata = kube::api::ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
+        };
 
-        let api_configmap: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
-        let api_secret: Api<Secret> = Api::namespaced(client.clone(), namespace);
-
-        // **Check if resource exists, if not, create an empty one**
-        match resource_type {
+        // Only a NotFound answer creates an empty resource; any other error
+        // fails construction instead of starting with an empty cache.
+        let data = match resource_type {
             KubernetesResource::ConfigMap => {
-                if api_configmap.get(name).await.is_err() {
-                    let new_configmap = ConfigMap {
-                        metadata: kube::api::ObjectMeta {
-                            name: Some(name.to_string()),
-                            namespace: Some(namespace.to_string()),
-                            ..Default::default()
-                        },
-                        data: Some(BTreeMap::new()), // Empty ConfigMap
-                        ..Default::default()
-                    };
-                    api_configmap
-                        .create(&PostParams::default(), &new_configmap)
-                        .await?;
-                }
+                let api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
+                let empty = ConfigMap {
+                    metadata,
+                    data: Some(BTreeMap::new()),
+                    ..Default::default()
+                };
+                get_or_create(&api, name, empty)
+                    .await?
+                    .data
+                    .unwrap_or_default()
             }
             KubernetesResource::Secret => {
-                if api_secret.get(name).await.is_err() {
-                    let new_secret = Secret {
-                        metadata: kube::api::ObjectMeta {
-                            name: Some(name.to_string()),
-                            namespace: Some(namespace.to_string()),
-                            ..Default::default()
-                        },
-                        data: Some(BTreeMap::new()), // Empty Secret
-                        ..Default::default()
-                    };
-                    api_secret
-                        .create(&PostParams::default(), &new_secret)
-                        .await?;
-                }
+                let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+                let empty = Secret {
+                    metadata,
+                    data: Some(BTreeMap::new()),
+                    ..Default::default()
+                };
+                let secret = get_or_create(&api, name, empty).await?;
+                secret
+                    .data
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|(key, value)| {
+                        String::from_utf8(value.0)
+                            .ok()
+                            .map(|decoded| (key, decoded))
+                    })
+                    .collect()
             }
-        }
-
-        if resource_type == KubernetesResource::ConfigMap {
-            if let Ok(config_map) = api_configmap.get(name).await {
-                if let Some(data) = config_map.data {
-                    let mut cache_write = cache.write().await;
-                    *cache_write = data;
-                }
-            }
-        } else if let Ok(secret) = api_secret.get(name).await {
-            if let Some(data) = secret.data {
-                let mut cache_write = cache.write().await;
-                for (key, value) in data {
-                    if let Ok(decoded) = String::from_utf8(value.0) {
-                        cache_write.insert(key, decoded);
-                    }
-                }
-            }
-        }
+        };
+        let cache = Arc::new(RwLock::new(data));
 
         Ok(Self {
             namespace: namespace.to_string(),
@@ -105,7 +89,12 @@ impl KubernetesStore {
     }
 
     pub async fn set(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let patch = json!({"data": {key: value}});
+        // Hold the lock across the patch, as delete does, so concurrent writes
+        // reach the resource and the cache in the same order, and a failed
+        // patch leaves the cache unchanged.
+        let mut cache_write = self.cache.write().await;
+
+        let patch = set_patch(key, value, self.resource_type);
         let patch_params = PatchParams::apply("simple-kv-store");
 
         if self.resource_type == KubernetesResource::ConfigMap {
@@ -114,13 +103,10 @@ impl KubernetesStore {
                 .await?;
         } else {
             let api: Api<Secret> = Api::namespaced(self.client.clone(), &self.namespace);
-            let encoded_value = BASE64_STANDARD.encode(value);
-            let patch = json!({"data": {key: encoded_value}});
             api.patch(&self.name, &patch_params, &Patch::Merge(patch))
                 .await?;
         }
 
-        let mut cache_write = self.cache.write().await;
         cache_write.insert(key.to_string(), value.to_string());
 
         Ok(())
@@ -160,9 +146,94 @@ fn delete_patch(key: &str) -> serde_json::Value {
     json!({"data": {key: null}})
 }
 
+/// Merge patch body that sets `key` to `value`. Secret data is base64 encoded.
+fn set_patch(key: &str, value: &str, resource_type: KubernetesResource) -> serde_json::Value {
+    match resource_type {
+        KubernetesResource::ConfigMap => json!({"data": {key: value}}),
+        KubernetesResource::Secret => json!({"data": {key: BASE64_STANDARD.encode(value)}}),
+    }
+}
+
+/// Whether the API server answered that the resource does not exist.
+fn is_not_found(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(response) if response.code == 404)
+}
+
+/// Whether the API server answered that the resource already exists.
+fn is_already_exists(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(response) if response.code == 409)
+}
+
+/// Reads the resource, creating `empty` when the server says it does not exist.
+///
+/// Every other error is returned, so a permission or network problem is never
+/// mistaken for a missing resource and the store never starts with an empty
+/// cache while the resource holds data.
+async fn get_or_create<K>(api: &Api<K>, name: &str, empty: K) -> Result<K, kube::Error>
+where
+    K: kube::Resource + Clone + serde::de::DeserializeOwned + serde::Serialize + std::fmt::Debug,
+{
+    match api.get(name).await {
+        Ok(resource) => Ok(resource),
+        Err(err) if is_not_found(&err) => match api.create(&PostParams::default(), &empty).await {
+            Ok(created) => Ok(created),
+            // Someone else created it between our get and create: read theirs.
+            Err(err) if is_already_exists(&err) => api.get(name).await,
+            Err(err) => Err(err),
+        },
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kube::core::ErrorResponse;
+
+    fn api_error(code: u16, reason: &str) -> kube::Error {
+        kube::Error::Api(ErrorResponse {
+            status: "Failure".to_string(),
+            message: format!("{reason} for test"),
+            reason: reason.to_string(),
+            code,
+        })
+    }
+
+    #[test]
+    fn only_a_404_api_error_means_the_resource_is_missing() {
+        assert!(is_not_found(&api_error(404, "NotFound")));
+        assert!(!is_not_found(&api_error(403, "Forbidden")));
+        assert!(!is_not_found(&api_error(401, "Unauthorized")));
+        assert!(!is_not_found(&api_error(500, "InternalError")));
+        assert!(!is_not_found(&kube::Error::LinesCodecMaxLineLengthExceeded));
+    }
+
+    #[test]
+    fn only_a_409_api_error_means_the_resource_already_exists() {
+        assert!(is_already_exists(&api_error(409, "AlreadyExists")));
+        assert!(!is_already_exists(&api_error(404, "NotFound")));
+        assert!(!is_already_exists(&api_error(403, "Forbidden")));
+        assert!(!is_already_exists(
+            &kube::Error::LinesCodecMaxLineLengthExceeded
+        ));
+    }
+
+    #[test]
+    fn set_patch_for_a_configmap_sends_the_value_as_is() {
+        assert_eq!(
+            set_patch("hcd.mutes.v1", "{\"a\":1}", KubernetesResource::ConfigMap),
+            json!({"data": {"hcd.mutes.v1": "{\"a\":1}"}})
+        );
+    }
+
+    // "hello" in base64 is "aGVsbG8=".
+    #[test]
+    fn set_patch_for_a_secret_sends_the_value_base64_encoded() {
+        assert_eq!(
+            set_patch("token", "hello", KubernetesResource::Secret),
+            json!({"data": {"token": "aGVsbG8="}})
+        );
+    }
 
     // ConfigMap and Secret both store entries under `data`, and a JSON merge
     // patch removes an entry only when it is set to null, so delete sends the
