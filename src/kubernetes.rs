@@ -127,23 +127,56 @@ impl KubernetesStore {
     }
 
     pub async fn delete(&self, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Hold the lock across the patch so the cache changes only after the
+        // resource did, and a failed patch leaves both unchanged.
         let mut cache_write = self.cache.write().await;
 
-        if cache_write.remove(key).is_some() {
-            let patch = json!({"data": cache_write.clone()});
-            let patch_params = PatchParams::apply("simple-kv-store");
+        // Patch even when the key is not cached: a Secret value that is not
+        // UTF-8 is skipped when loading, but must still be deletable.
+        let patch = delete_patch(key);
+        let patch_params = PatchParams::apply("simple-kv-store");
 
-            if self.resource_type == KubernetesResource::ConfigMap {
-                let api: Api<ConfigMap> = Api::namespaced(self.client.clone(), &self.namespace);
-                api.patch(&self.name, &patch_params, &Patch::Merge(patch))
-                    .await?;
-            } else {
-                let api: Api<Secret> = Api::namespaced(self.client.clone(), &self.namespace);
-                api.patch(&self.name, &patch_params, &Patch::Merge(patch))
-                    .await?;
-            }
+        if self.resource_type == KubernetesResource::ConfigMap {
+            let api: Api<ConfigMap> = Api::namespaced(self.client.clone(), &self.namespace);
+            api.patch(&self.name, &patch_params, &Patch::Merge(patch))
+                .await?;
+        } else {
+            let api: Api<Secret> = Api::namespaced(self.client.clone(), &self.namespace);
+            api.patch(&self.name, &patch_params, &Patch::Merge(patch))
+                .await?;
         }
 
+        cache_write.remove(key);
+
         Ok(())
+    }
+}
+
+/// Merge patch body that removes `key` from a ConfigMap or Secret.
+///
+/// A JSON merge patch (RFC 7386) removes a field only when it is set to null;
+/// omitting the field leaves it in place.
+fn delete_patch(key: &str) -> serde_json::Value {
+    json!({"data": {key: null}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ConfigMap and Secret both store entries under `data`, and a JSON merge
+    // patch removes an entry only when it is set to null, so delete sends the
+    // same body for either resource type.
+    #[test]
+    fn delete_patch_sets_only_the_deleted_key_to_null() {
+        assert_eq!(delete_patch("muted"), json!({"data": {"muted": null}}));
+    }
+
+    #[test]
+    fn delete_patch_keeps_the_key_verbatim() {
+        assert_eq!(
+            delete_patch("hcd.mutes.v1"),
+            json!({"data": {"hcd.mutes.v1": null}})
+        );
     }
 }
